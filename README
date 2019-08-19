@@ -1,3 +1,21 @@
+Modified Version of libSVM
+==========================
+
+This is a modified version of libSVM 3.23, with the SVDD code merged and additional kernel functions.
+
+For the original libSVM, see: https://www.csie.ntu.edu.tw/~cjlin/libsvm/
+
+The SVDD code is from: https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/#libsvm_for_svdd_and_finding_the_smallest_sphere_containing_all_data
+but updated to 3.23, and added to the Java version.
+
+The additional kernel functions come from libCVM: https://github.com/aydindemircioglu/libCVM/
+But the code for core SVMs and ball SVMs has not been merged (CVDD / CVM / CVR / BVM).
+
+This is UNTESTED code. Use at your own risk.
+
+Original libSVM introduction
+============================
+
 Libsvm is a simple, easy-to-use, and efficient software for SVM
 classification and regression. It solves C-SVM classification, nu-SVM
 classification, one-class-SVM, epsilon-SVM regression, and nu-SVM
@@ -142,16 +160,23 @@ options:
 	2 -- one-class SVM
 	3 -- epsilon-SVR	(regression)
 	4 -- nu-SVR		(regression)
+	5 -- SVDD		(C should be between 1/num_instances and 1)
+	6 -- R^2: L1SVM
+	7 -- R^2: L2SVM
 -t kernel_type : set type of kernel function (default 2)
 	0 -- linear: u'*v
 	1 -- polynomial: (gamma*u'*v + coef0)^degree
 	2 -- radial basis function: exp(-gamma*|u-v|^2)
 	3 -- sigmoid: tanh(gamma*u'*v + coef0)
 	4 -- precomputed kernel (kernel values in training_set_file)
+	5 -- laplacian: exp(-sqrt(gamma)*|u-v|)
+	6 -- normalized poly: ((gamma*u'*v+coef0)/sqrt((gamma*u'*u+coef0)*(gamma*v'*v+coef0)))^degree
+	7 -- inverse distance: 1/(sqrt(gamma)*|u-v|+1)
+	8 -- inverse square distance: 1/(gamma*|u-v|^2+1)
 -d degree : set degree in kernel function (default 3)
 -g gamma : set gamma in kernel function (default 1/num_features)
 -r coef0 : set coef0 in kernel function (default 0)
--c cost : set the parameter C of C-SVC, epsilon-SVR, and nu-SVR (default 1)
+-c cost : set the parameter C of -s 0, 3, 4, 5 and 7 (default 1, except 2/num_instances for -s 5)
 -n nu : set the parameter nu of nu-SVC, one-class SVM, and nu-SVR (default 0.5)
 -p epsilon : set the epsilon in loss function of epsilon-SVR (default 0.1)
 -m cachesize : set cache memory size in MB (default 100)

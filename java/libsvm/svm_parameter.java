@@ -7,6 +7,9 @@ public class svm_parameter implements Cloneable,java.io.Serializable
 	public static final int ONE_CLASS = 2;
 	public static final int EPSILON_SVR = 3;
 	public static final int NU_SVR = 4;
+	public static final int SVDD = 5;
+	public static final int R2 = 6;
+	public static final int R2q = 7;
 
 	/* kernel_type */
 	public static final int LINEAR = 0;
@@ -14,6 +17,10 @@ public class svm_parameter implements Cloneable,java.io.Serializable
 	public static final int RBF = 2;
 	public static final int SIGMOID = 3;
 	public static final int PRECOMPUTED = 4;
+	public static final int EXP = 5;
+	public static final int NORMAL_POLY = 6;
+	public static final int INV_DIST = 7;
+	public static final int INV_SQDIST = 8;
 
 	public int svm_type;
 	public int kernel_type;

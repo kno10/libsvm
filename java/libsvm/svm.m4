@@ -182,6 +182,14 @@ abstract class Kernel extends QMatrix {
 				return tanh(gamma*dot(x[i],x[j])+coef0);
 			case PRECOMPUTED:
 				return x[i][(int)(x[j][0].value)].value;
+			case EXP:
+				return exp(-sqrt(gamma*(x_square[i]+x_square[j]-2*dot(x[i],x[j]))));
+			case NORMAL_POLY:
+				return pow((gamma*dot(x[i],x[j])+coef0) / sqrt((gamma*x_square[i]+coef0)*(gamma*x_square[j])+coef0),degree);
+			case INV_DIST:
+				return 1.0/(gamma*(x_square[i]+x_square[j]-2*dot(x[i],x[j]))+1.0);
+			case INV_SQDIST:
+				return 1.0/(sqrt(gamma*(x_square[i]+x_square[j]-2*dot(x[i],x[j])))+1.0);
 			default:
 				return 0;	// invalid parameter
 		}
@@ -196,7 +204,7 @@ abstract class Kernel extends QMatrix {
 
 		x = (svm_node[][])x_.clone();
 
-		if(kernel_type == RBF)
+		if(kernel_type == RBF || kernel_type == NORMAL_POLY || kernel_type == EXP || kernel_type == INV_DIST || kernel_type == INV_SQDIST)
 		{
 			x_square = new double[l];
 			for(int i=0;i<l;i++)
@@ -228,6 +236,46 @@ abstract class Kernel extends QMatrix {
 		return sum;
 	}
 
+	static double distanceSq(svm_node[] x, svm_node[] y)
+	{
+		double sum = 0;
+		int xlen = x.length;
+		int ylen = y.length;
+		int i = 0;
+		int j = 0;
+		while(i < xlen && j < ylen)
+		{
+			if(x[i].index == y[j].index)
+			{
+				double d = (double)x[i++].value - (double)y[j++].value;
+				sum += d*d;
+			}
+			else if(x[i].index > y[j].index)
+			{
+				sum += (double)y[j].value * (double)y[j].value;
+				++j;
+			}
+			else
+			{
+				sum += (double)x[i].value * (double)x[i].value;
+				++i;
+			}
+		}
+
+		while(i < xlen)
+		{
+			sum += (double)x[i].value * (double)x[i].value;
+			++i;
+		}
+
+		while(j < ylen)
+		{
+			sum += (double)y[j].value * (double)y[j].value;
+			++j;
+		}
+		return sum;
+	}
+
 	static double k_function(svm_node[] x, svm_node[] y,
 					svm_parameter param)
 	{
@@ -238,45 +286,15 @@ abstract class Kernel extends QMatrix {
 			case POLY:
 				return powi(param.gamma*dot(x,y)+param.coef0,param.degree);
 			case RBF:
-			{
-				double sum = 0;
-				int xlen = x.length;
-				int ylen = y.length;
-				int i = 0;
-				int j = 0;
-				while(i < xlen && j < ylen)
-				{
-					if(x[i].index == y[j].index)
-					{
-						double d = x[i++].value - y[j++].value;
-						sum += d*d;
-					}
-					else if(x[i].index > y[j].index)
-					{
-						sum += y[j].value * y[j].value;
-						++j;
-					}
-					else
-					{
-						sum += x[i].value * x[i].value;
-						++i;
-					}
-				}
-
-				while(i < xlen)
-				{
-					sum += x[i].value * x[i].value;
-					++i;
-				}
-
-				while(j < ylen)
-				{
-					sum += y[j].value * y[j].value;
-					++j;
-				}
-
-				return exp(-param.gamma*sum);
-			}
+				return exp(-param.gamma*distanceSq(x,y));
+			case EXP:
+				return exp(-sqrt(param.gamma*distanceSq(x,y)));
+			case INV_DIST:
+				return 1.0/(sqrt(param.gamma*distanceSq(x,y))+1.0);
+			case INV_SQDIST:
+				return 1.0/(param.gamma*distanceSq(x,y)+1.0);
+			case NORMAL_POLY:
+				return pow((param.gamma*dot(x,y)+param.coef0)/sqrt((param.gamma*dot(x,x)+param.coef0)*(param.gamma*dot(y,y)+param.coef0)),param.degree);
 			case SIGMOID:
 				return tanh(param.gamma*dot(x,y)+param.coef0);
 			case PRECOMPUTED:  //x: test (validation), y: SV
@@ -1232,6 +1250,49 @@ class ONE_CLASS_Q extends Kernel
 	}
 }
 
+class R2_Qq extends Kernel
+{
+	private final Cache cache;
+	private double C;
+	private final double[] QD;
+
+	R2_Qq(svm_problem prob, svm_parameter param)
+	{
+		super(prob.l, prob.x, param);
+		cache = new Cache(prob.l,(int)(param.cache_size*(1<<20)));
+		this.C = param.C;
+		QD = new double[prob.l];
+		for(int i=0;i<prob.l;i++)
+			QD[i] = kernel_function(i,i) + 1/C;
+	}
+
+	Qfloat[] get_Q(int i, int len)
+	{
+		Qfloat[][] data = new Qfloat[1][];
+		int start, j;
+		if((start = cache.get_data(i,data,len)) < len)
+		{
+			for(j=start;j<len;j++)
+				data[0][j] = (Qfloat)kernel_function(i,j);
+			if(i >= start && i < len)
+				data[0][i] += (Qfloat)(1/C);
+		}
+		return data[0];
+	}
+
+	double[] get_QD()
+	{
+		return QD;
+	}
+
+	void swap_index(int i, int j)
+	{
+		cache.swap_index(i,j);
+		super.swap_index(i,j);
+		swap(double,QD[i],QD[j]);
+	}
+};
+
 class SVR_Q extends Kernel
 {
 	private final int l;
@@ -1495,6 +1556,109 @@ public class svm {
 			alpha[i] = alpha2[i] - alpha2[i+l];
 	}
 
+static void solve_svdd(
+	svm_problem prob, svm_parameter param,
+	double[] alpha, Solver.SolutionInfo si)
+{
+	int l = prob.l;
+	int i,j;
+	double r_square;
+	double C = param.C;
+	double[] QD = new double[l];
+	double[] linear_term = new double[l];
+	byte[] ones = new byte[l];
+
+	ONE_CLASS_Q Q = new ONE_CLASS_Q(prob, param);
+	for(i=0;i<l;i++)
+	{
+		QD[i] = Q.get_QD()[i];
+		linear_term[i] = -0.5 * Q.get_QD()[i];
+	}
+
+	if(C > (double)1/l)
+	{
+		double sum_alpha = 1;
+		for(i=0;i<l;i++)
+		{
+			alpha[i] = min(C,sum_alpha);
+			sum_alpha -= alpha[i];
+
+			ones[i] = 1;
+		}
+
+		Solver s = new Solver();
+		s.Solve(l, Q, linear_term, ones, alpha, C, C,
+			param.eps, si, param.shrinking);
+
+		// \bar{R} = 2(obj-rho) + sum K_{ii}*alpha_i
+		// because rho = (a^Ta - \bar{R})/2
+		r_square = 2*(si.obj-si.rho);
+		for(i=0;i<l;i++)
+			r_square += alpha[i]*QD[i];
+	}
+	else
+	{
+		r_square = 0.0;
+		double rho = 0;
+		double obj = 0;
+
+		// rho = aTa/2 = sum sum Q_ij /l/l/2
+		// obj = 0.5*(-sum Q_ii + sum sum Q_ij /l)*C
+		// 0.5 for consistency with C > 1/l, where dual is divided by 2
+		for(i=0;i<l;i++)
+		{
+			alpha[i] = 1.0 / l;
+			obj -= QD[i]/2;
+			rho += QD[i]/2;
+			for(j=i+1;j<l;j++)
+				rho += Kernel.k_function(prob.x[i],prob.x[j],param);
+		}
+		si.obj = (obj + rho/l)*C;
+		si.rho = rho / (l*l);
+	}
+
+	svm.info("R^2 = "+r_square+"\n");
+	if(C > 1 && param.svm_type == SVDD)
+		info("Warning: Note that after C > 1, all models are the same.\n");
+	if(C <= 1.0 / l)
+		info("Warning: R^* = 0 for C <= 1/#instances.\n");
+}
+
+static void solve_r2(
+		svm_problem prob, svm_parameter param,
+		double[] alpha, Solver.SolutionInfo si)
+{
+	svm_parameter svdd_param = param; // FIXME: copy?
+	svdd_param.C = 2;
+
+	solve_svdd(prob,svdd_param,alpha,si);
+}
+
+static void solve_r2q(
+		svm_problem prob, svm_parameter param,
+		double[] alpha, Solver.SolutionInfo si)
+{
+	int l = prob.l;
+	double[] linear_term = new double[l];
+	byte[] ones = new byte[l];
+	int i;
+
+	alpha[0] = 1;
+	for(i=1;i<l;i++)
+		alpha[i] = 0;
+
+	for(i=0;i<l;i++)
+	{
+		linear_term[i]=-0.5*(Kernel.k_function(prob.x[i],prob.x[i],param) + 1.0/param.C);
+		ones[i] = 1;
+	}
+
+	Solver s = new Solver();
+	s.Solve(l, new R2_Qq(prob,param), linear_term, ones,
+			alpha, Solver.INF, Solver.INF, param.eps, si, param.shrinking);
+
+	svm.info("R^2 = "+(-2 *si.obj)+"\n");
+}
 	//
 	// decision_function
 	//
@@ -1526,6 +1690,15 @@ public class svm {
 				break;
 			case NU_SVR:
 				solve_nu_svr(prob,param,alpha,si);
+				break;
+			case SVDD:
+				solve_svdd(prob,param,alpha,si);
+				break;
+			case R2:
+				solve_r2(prob,param,alpha,si);
+				break;
+			case R2q:
+				solve_r2q(prob,param,alpha,si);
 				break;
 		}
 
@@ -1678,7 +1851,7 @@ public class svm {
 	private static double sigmoid_predict(double decision_value, double A, double B)
 	{
 		double fApB = decision_value*A+B;
-	// 1-p used later; avoid catastrophic cancellation
+		// 1-p used later; avoid catastrophic cancellation
 		if (fApB >= 0)
 			return exp(-fApB)/(1.0+exp(-fApB));
 		else
@@ -1946,7 +2119,10 @@ public class svm {
 
 		if(param.svm_type == ONE_CLASS ||
 		   param.svm_type == EPSILON_SVR ||
-		   param.svm_type == NU_SVR)
+		   param.svm_type == NU_SVR ||
+		   param.svm_type == SVDD ||
+		   param.svm_type == R2 ||
+		   param.svm_type == R2q)
 		{
 			// regression or one-class-svm
 			model.nr_class = 2;
@@ -2184,7 +2360,7 @@ public class svm {
 		int[] perm = new int[l];
 
 		// stratified cv may not give leave-one-out rate
-		// Each class to l folds -> some folds may have zero elements
+		// Each class to l folds . some folds may have zero elements
 		if((param.svm_type == C_SVC ||
 		    param.svm_type == NU_SVC) && nr_fold < l)
 		{
@@ -2346,6 +2522,18 @@ public class svm {
 			else
 				return sum;
 		}
+		else if (model.param.svm_type == SVDD)
+		{
+			// Compute distance from center of hypersphere
+			// rho = (a^Ta - \bar{R})/2
+			double[] sv_coef = model.sv_coef[0];
+			double tmp_value = Kernel.k_function(x,x,model.param); // x^T x - 2 x^T a
+			for(i=0;i<model.l;i++)
+				tmp_value -= 2 * sv_coef[i] * Kernel.k_function(x,model.SV[i],model.param);
+
+			dec_values[0] = tmp_value + 2*model.rho[0];
+			return (dec_values[0]<=0?1:-1);
+		}
 		else
 		{
 			int nr_class = model.nr_class;
@@ -2406,7 +2594,8 @@ public class svm {
 		double[] dec_values;
 		if(model.param.svm_type == ONE_CLASS ||
 				model.param.svm_type == EPSILON_SVR ||
-				model.param.svm_type == NU_SVR)
+				model.param.svm_type == NU_SVR ||
+				model.param.svm_type == SVDD)
 			dec_values = new double[1];
 		else
 			dec_values = new double[nr_class*(nr_class-1)/2];
@@ -2455,12 +2644,12 @@ public class svm {
 
 	static final String svm_type_table[] =
 	{
-		"c_svc","nu_svc","one_class","epsilon_svr","nu_svr",
+		"c_svc","nu_svc","one_class","epsilon_svr","nu_svr","svdd","r2","r2q",
 	};
 
 	static final String kernel_type_table[]=
 	{
-		"linear","polynomial","rbf","sigmoid","precomputed"
+		"linear","polynomial","rbf","sigmoid","precomputed","exp","normalized_poly","inverse_dist","inverse_sqdist"
 	};
 
 	public static void svm_save_model(String model_file_name, svm_model model) throws IOException
@@ -2477,11 +2666,17 @@ public class svm {
 
 		if(param.kernel_type == POLY ||
 		   param.kernel_type == RBF ||
-		   param.kernel_type == SIGMOID)
+		   param.kernel_type == SIGMOID ||
+		   param.kernel_type == EXP ||
+		   param.kernel_type == NORMAL_POLY ||
+		   param.kernel_type == INV_SQDIST ||
+		   param.kernel_type == INV_DIST)
 			fp.writeBytes("gamma "+param.gamma+"\n");
 
 		if(param.kernel_type == POLY ||
-		   param.kernel_type == SIGMOID)
+		   param.kernel_type == SIGMOID ||
+		   param.kernel_type == EXP ||
+		   param.kernel_type == NORMAL_POLY)
 			fp.writeBytes("coef0 "+param.coef0+"\n");
 
 		int nr_class = model.nr_class;
@@ -2736,7 +2931,10 @@ public class svm {
 		   svm_type != NU_SVC &&
 		   svm_type != ONE_CLASS &&
 		   svm_type != EPSILON_SVR &&
-		   svm_type != NU_SVR)
+		   svm_type != NU_SVR &&
+		   svm_type != SVDD &&
+		   svm_type != R2 &&
+		   svm_type != R2q)
 		return "unknown svm type";
 
 		// kernel_type, degree
@@ -2746,7 +2944,11 @@ public class svm {
 		   kernel_type != POLY &&
 		   kernel_type != RBF &&
 		   kernel_type != SIGMOID &&
-		   kernel_type != PRECOMPUTED)
+		   kernel_type != PRECOMPUTED &&
+		   kernel_type != EXP &&
+		   kernel_type != NORMAL_POLY &&
+		   kernel_type != INV_SQDIST &&
+		   kernel_type != INV_DIST)
 			return "unknown kernel type";
 
 		if(param.gamma < 0)
@@ -2765,7 +2967,9 @@ public class svm {
 
 		if(svm_type == C_SVC ||
 		   svm_type == EPSILON_SVR ||
-		   svm_type == NU_SVR)
+		   svm_type == NU_SVR ||
+		   svm_type == SVDD ||
+		   svm_type == R2q)
 			if(param.C <= 0)
 				return "C <= 0";
 
@@ -2788,7 +2992,7 @@ public class svm {
 			return "probability != 0 and probability != 1";
 
 		if(param.probability == 1 &&
-		   svm_type == ONE_CLASS)
+		   svm_type == ONE_CLASS || svm_type == SVDD)
 			return "one-class SVM probability output not supported yet";
 
 		// check whether nu-svc is feasible

@@ -23,7 +23,7 @@ struct svm_problem
 };
 
 enum { C_SVC, NU_SVC, ONE_CLASS, EPSILON_SVR, NU_SVR, SVDD, R2, R2q };	/* svm_type */
-enum { LINEAR, POLY, RBF, SIGMOID, PRECOMPUTED }; /* kernel_type */
+enum { LINEAR, POLY, RBF, SIGMOID, PRECOMPUTED, EXP, NORMAL_POLY, INV_DIST, INV_SQDIST };   /* kernel_type */
 
 struct svm_parameter
 {

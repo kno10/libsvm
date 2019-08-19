@@ -228,6 +228,7 @@ private:
 	const double coef0;
 
 	static double dot(const svm_node *px, const svm_node *py);
+	static double distanceSq(const svm_node *x, const svm_node *y);
 	double kernel_linear(int i, int j) const
 	{
 		return dot(x[i],x[j]);
@@ -247,6 +248,22 @@ private:
 	double kernel_precomputed(int i, int j) const
 	{
 		return x[i][(int)(x[j][0].value)].value;
+	}
+	double kernel_exp(int i, int j) const
+	{
+		return exp(-sqrt(gamma*(x_square[i]+x_square[j]-2*dot(x[i],x[j]))));
+	}
+	double kernel_normalized_poly(int i, int j) const
+	{
+		return pow((gamma*dot(x[i],x[j])+coef0) / sqrt((gamma*x_square[i]+coef0)*(gamma*x_square[j])+coef0),degree);
+	}
+	double kernel_inv_sqdist(int i, int j) const
+	{
+		return 1.0/(gamma*(x_square[i]+x_square[j]-2*dot(x[i],x[j]))+1.0);
+	}
+	double kernel_inv_dist(int i, int j) const
+	{
+		return 1.0/(sqrt(gamma*(x_square[i]+x_square[j]-2*dot(x[i],x[j])))+1.0);
 	}
 };
 
@@ -271,11 +288,23 @@ Kernel::Kernel(int l, svm_node * const * x_, const svm_parameter& param)
 		case PRECOMPUTED:
 			kernel_function = &Kernel::kernel_precomputed;
 			break;
+	        case EXP:
+		        kernel_function = &Kernel::kernel_exp;
+			break;
+	        case NORMAL_POLY:
+		        kernel_function = &Kernel::kernel_normalized_poly;
+			break;
+		case INV_DIST:
+			kernel_function = &Kernel::kernel_inv_dist;
+			break;
+		case INV_SQDIST:
+			kernel_function = &Kernel::kernel_inv_sqdist;
+			break;
 	}
 
 	clone(x,x_,l);
 
-	if(kernel_type == RBF)
+	if(kernel_type == RBF || kernel_type == NORMAL_POLY || kernel_type == EXP || kernel_type == INV_DIST || kernel_type == INV_SQDIST)
 	{
 		x_square = new double[l];
 		for(int i=0;i<l;i++)
@@ -298,7 +327,7 @@ double Kernel::dot(const svm_node *px, const svm_node *py)
 	{
 		if(px->index == py->index)
 		{
-			sum += px->value * py->value;
+			sum += (double)px->value * (double)py->value;
 			++px;
 			++py;
 		}
@@ -313,6 +342,47 @@ double Kernel::dot(const svm_node *px, const svm_node *py)
 	return sum;
 }
 
+double Kernel::distanceSq(const svm_node *x, const svm_node *y)
+{
+	double sum = 0;
+	while(x->index != -1 && y->index !=-1)
+	{
+		if(x->index == y->index)
+		{
+			double d = (double)x->value - (double)y->value;
+			sum += d*d;
+			++x;
+			++y;
+		}
+		else
+		{
+			if(x->index > y->index)
+			{
+				sum += ((double)y->value) * (double)y->value;
+				++y;
+			}
+			else
+			{
+				sum += ((double)x->value) * (double)x->value;
+				++x;
+			}
+		}
+	}
+
+	while(x->index != -1)
+	{
+		sum += ((double)x->value) * (double)x->value;
+		++x;
+	}
+
+	while(y->index != -1)
+	{
+		sum += ((double)y->value) * (double)y->value;
+		++y;
+	}
+	return sum;
+}
+
 double Kernel::k_function(const svm_node *x, const svm_node *y,
 			  const svm_parameter& param)
 {
@@ -323,46 +393,15 @@ double Kernel::k_function(const svm_node *x, const svm_node *y,
 		case POLY:
 			return powi(param.gamma*dot(x,y)+param.coef0,param.degree);
 		case RBF:
-		{
-			double sum = 0;
-			while(x->index != -1 && y->index !=-1)
-			{
-				if(x->index == y->index)
-				{
-					double d = x->value - y->value;
-					sum += d*d;
-					++x;
-					++y;
-				}
-				else
-				{
-					if(x->index > y->index)
-					{
-						sum += y->value * y->value;
-						++y;
-					}
-					else
-					{
-						sum += x->value * x->value;
-						++x;
-					}
-				}
-			}
-
-			while(x->index != -1)
-			{
-				sum += x->value * x->value;
-				++x;
-			}
-
-			while(y->index != -1)
-			{
-				sum += y->value * y->value;
-				++y;
-			}
-
-			return exp(-param.gamma*sum);
-		}
+			return exp(-param.gamma*distanceSq(x,y));
+	        case EXP:
+			return exp(-sqrt(param.gamma*distanceSq(x,y)));
+		case INV_DIST:
+			return 1.0/(sqrt(param.gamma*distanceSq(x,y))+1.0);
+		case INV_SQDIST:
+			return 1.0/(param.gamma*distanceSq(x,y)+1.0);
+	        case NORMAL_POLY:
+			return pow((param.gamma*dot(x,y)+param.coef0)/sqrt((param.gamma*dot(x,x)+param.coef0)*(param.gamma*dot(y,y)+param.coef0)),param.degree);
 		case SIGMOID:
 			return tanh(param.gamma*dot(x,y)+param.coef0);
 		case PRECOMPUTED:  //x: test (validation), y: SV
@@ -2828,7 +2867,7 @@ static const char *svm_type_table[] =
 
 static const char *kernel_type_table[]=
 {
-	"linear","polynomial","rbf","sigmoid","precomputed",NULL
+	"linear","polynomial","rbf","sigmoid","precomputed","exp","normalized_poly","inverse_dist","inverse_sqdist",NULL
 };
 
 int svm_save_model(const char *model_file_name, const svm_model *model)
@@ -2847,13 +2886,14 @@ int svm_save_model(const char *model_file_name, const svm_model *model)
 	fprintf(fp,"svm_type %s\n", svm_type_table[param.svm_type]);
 	fprintf(fp,"kernel_type %s\n", kernel_type_table[param.kernel_type]);
 
-	if(param.kernel_type == POLY)
+	if(param.kernel_type == POLY || param.kernel_type == NORMAL_POLY)
 		fprintf(fp,"degree %d\n", param.degree);
 
-	if(param.kernel_type == POLY || param.kernel_type == RBF || param.kernel_type == SIGMOID)
+	if(param.kernel_type == POLY || param.kernel_type == RBF || param.kernel_type == SIGMOID || param.kernel_type == EXP
+		|| param.kernel_type == NORMAL_POLY || param.kernel_type == INV_SQDIST || param.kernel_type == INV_DIST)
 		fprintf(fp,"gamma %.17g\n", param.gamma);
 
-	if(param.kernel_type == POLY || param.kernel_type == SIGMOID)
+	if(param.kernel_type == POLY || param.kernel_type == SIGMOID || param.kernel_type == EXP || param.kernel_type == NORMAL_POLY)
 		fprintf(fp,"coef0 %.17g\n", param.coef0);
 
 	int nr_class = model->nr_class;
@@ -3252,7 +3292,11 @@ const char *svm_check_parameter(const svm_problem *prob, const svm_parameter *pa
 	   kernel_type != POLY &&
 	   kernel_type != RBF &&
 	   kernel_type != SIGMOID &&
-	   kernel_type != PRECOMPUTED)
+	   kernel_type != PRECOMPUTED &&
+	   kernel_type != EXP &&
+	   kernel_type != NORMAL_POLY &&
+	   kernel_type != INV_SQDIST &&
+	   kernel_type != INV_DIST)
 		return "unknown kernel type";
 
 	if(param->gamma < 0)
